@@ -2,118 +2,197 @@ import streamlit as st
 import pandas as pd
 
 
-st.title("📊 Data evaluation app")
 
-st.write(
-    "We are so glad to see you here. ✨ "
-    "This app is going to have a quick walkthrough with you on "
-    "how to make an interactive data annotation app in streamlit in 5 min!"
-)
+# Big title of the dashboard
 
-st.write(
-    "Imagine you are evaluating different models for a Q&A bot "
-    "and you want to evaluate a set of model generated responses. "
-    "You have collected some user data. "
-    "Here is a sample question and response set."
-)
 
-data = {
-    "Questions": [
-        "Who invented the internet?",
-        "What causes the Northern Lights?",
-        "Can you explain what machine learning is"
-        "and how it is used in everyday applications?",
-        "How do penguins fly?",
-    ],
-    "Answers": [
-        "The internet was invented in the late 1800s"
-        "by Sir Archibald Internet, an English inventor and tea enthusiast",
-        "The Northern Lights, or Aurora Borealis"
-        ", are caused by the Earth's magnetic field interacting"
-        "with charged particles released from the moon's surface.",
-        "Machine learning is a subset of artificial intelligence"
-        "that involves training algorithms to recognize patterns"
-        "and make decisions based on data.",
-        " Penguins are unique among birds because they can fly underwater. "
-        "Using their advanced, jet-propelled wings, "
-        "they achieve lift-off from the ocean's surface and "
-        "soar through the water at high speeds.",
-    ],
-}
+#......................Binance Liquidity Status...........................
+
+
+import requests
+
+# Make a GET request to the API endpoint
+response = requests.get('https://fapi.binance.com/fapi/v1/ticker/24hr')
+
+# Parse the JSON response to a Python list of dictionaries
+data = response.json()
+
+
+
+# # print(data)
+# # Create a list to hold the data
+# data_list = []
+
+# # Iterate over the list of dictionaries
+# for item in data:
+#     # Extract the 'symbol' and 'volume' fields
+#     symbol = item['symbol']
+#     volume = item['volume']
+#     volume_per_sec = float(item['volume']) / 86400
+
+#     # Append the extracted data to the list
+#     data_list.append([symbol, volume, volume_per_sec])
+
+# # Convert the list to a DataFrame
+# df = pd.DataFrame(data_list, columns=['symbol', 'volume', 'volume_per_sec'])
 
 df = pd.DataFrame(data)
+df
 
-st.write(df)
 
-st.write(
-    "Now I want to evaluate the responses from my model. "
-    "One way to achieve this is to use the very powerful `st.data_editor` feature. "
-    "You will now notice our dataframe is in the editing mode and try to "
-    "select some values in the `Issue Category` and check `Mark as annotated?` once finished 👇"
-)
+#...........................File Upload....................
 
-df["Issue"] = [True, True, True, False]
-df["Category"] = ["Accuracy", "Accuracy", "Completeness", ""]
+up_load_or_not = st.checkbox('Upload RFQ Data Manually?', value=False)
+if up_load_or_not:
+    file = st.file_uploader("Upload RFQ Data (.csv)")
+    data = pd.read_csv(file)
+else:
+    data = pd.read_csv('file.csv')
 
-new_df = st.data_editor(
-    df,
-    column_config={
-        "Questions": st.column_config.TextColumn(width="medium", disabled=True),
-        "Answers": st.column_config.TextColumn(width="medium", disabled=True),
-        "Issue": st.column_config.CheckboxColumn("Mark as annotated?", default=False),
-        "Category": st.column_config.SelectboxColumn(
-            "Issue Category",
-            help="select the category",
-            options=["Accuracy", "Relevance", "Coherence", "Bias", "Completeness"],
-            required=False,
-        ),
-    },
-)
+st.title('RFQ Data Visualization')
 
-st.write(
-    "You will notice that we changed our dataframe and added new data. "
-    "Now it is time to visualize what we have annotated!"
-)
 
-st.divider()
 
-st.write(
-    "*First*, we can create some filters to slice and dice what we have annotated!"
-)
 
-col1, col2 = st.columns([1, 1])
-with col1:
-    issue_filter = st.selectbox("Issues or Non-issues", options=new_df.Issue.unique())
-with col2:
-    category_filter = st.selectbox(
-        "Choose a category",
-        options=new_df[new_df["Issue"] == issue_filter].Category.unique(),
-    )
 
-st.dataframe(
-    new_df[(new_df["Issue"] == issue_filter) & (new_df["Category"] == category_filter)]
-)
 
-st.markdown("")
-st.write(
-    "*Next*, we can visualize our data quickly using `st.metrics` and `st.bar_plot`"
-)
+#.............Data Cleaning and Prep...............
+# data = pd.read_csv('file.csv')
+data = data.iloc[14:,:]
 
-issue_cnt = len(new_df[new_df["Issue"] == True])
-total_cnt = len(new_df)
-issue_perc = f"{issue_cnt/total_cnt*100:.0f}%"
+data['datetime'] = pd.to_datetime(data['timestamp'], unit='s')
+data['date'] = data['datetime'].dt.normalize()
 
-col1, col2 = st.columns([1, 1])
-with col1:
-    st.metric("Number of responses", issue_cnt)
-with col2:
-    st.metric("Annotation Progress", issue_perc)
+data = data.drop(columns=['createTime','updateTime'])
 
-df_plot = new_df[new_df["Category"] != ""].Category.value_counts().reset_index()
+filter_date = st.text_input('Enter the date to filter data after', '2024-01-01')
 
-st.bar_chart(df_plot, x="Category", y="count")
+# Filter data after a certain date
+data = data[data['date'] >= pd.Timestamp(filter_date)]
+data
 
-st.write(
-    "Here we are at the end of getting started with streamlit! Happy Streamlit-ing! :balloon:"
-)
 
+
+
+# Make buy and sell binary, 1 indicates buy, 0 indicates sell
+data['buy_flag'] = data['direction'].apply(lambda x: 1 if x == 'BUY' else 0)
+
+# Mutate one column that shows cumulative dynamic fees.
+data['cumulative_dynamic_fees_unsettled'] = data['dynamic_fees_in_usdt'].cumsum()
+
+# Mutate one column that shows dynamic fees deducted NAV.
+data['adjusted_nav'] = data['nav'] - data['cumulative_dynamic_fees_unsettled']
+
+data['volume'] = abs(data['onchain_usdt_amount'])
+
+
+days_elapsed = (data['datetime'].max() - data['datetime'].min()).days
+
+cumulative_pnl_all_time = data['order_final_pnl'].sum()
+cumulative_dynamic_fees_all_time = data['dynamic_fees_in_usdt'].sum()
+cumulative_cex_fees_all_time = data['cex_commission_fees_in_usdt'].sum()
+
+#....................Basic Data Analysis.....................
+
+aggregated_data = data.groupby('date').agg({'dynamic_fees_in_usdt': 'sum', 'cex_commission_fees_in_usdt': 'sum','orderHash':'count','buy_flag':'sum','order_final_pnl': 'sum','volume':'sum'})
+aggregated_data['nums_of_order'] = aggregated_data['orderHash']
+aggregated_data['buy_ratio'] = aggregated_data['buy_flag'] / aggregated_data['nums_of_order']
+
+aggregated_data['daily_pnl_to_volume'] = 100*aggregated_data['order_final_pnl'] / aggregated_data['volume']
+
+
+
+st.header('Aggregated Data')
+st.dataframe(aggregated_data)
+
+
+#....................Token Data Analysis.....................
+token_aggregated_data = data.groupby('symbol').agg({'dynamic_fees_in_usdt': 'sum', 'cex_commission_fees_in_usdt': 'sum','orderHash':'count','buy_flag':'sum','order_final_pnl': 'sum','volume':'sum'})
+
+
+st.header('Token Aggregated Data')
+st.dataframe(token_aggregated_data)
+
+
+
+
+
+
+#....................Visualization.....................
+
+st.header('Input Principal Amount')
+principal_amount = st.number_input('Enter the principal amount', value=200000)
+
+st.header('Cumulative Values')
+st.write(f'Cumulative PnL: {cumulative_pnl_all_time} USDT;')
+st.write(f'Cumulative Dynamic Fees: {cumulative_dynamic_fees_all_time} USDT;')
+st.write(f'Cumulative CEX Fees: {cumulative_cex_fees_all_time} USDT;')
+st.write(f'Cumulative PnL%: {cumulative_pnl_all_time/principal_amount*100}%;')
+st.write(f'Corresponding APR: {(cumulative_pnl_all_time/principal_amount*100)/days_elapsed*365}%;')
+
+
+
+
+
+st.header('Cumulative of order_final_pnl')
+st.line_chart(data['order_final_pnl'].cumsum())
+
+st.header('Cumulative of dynamic_fees_in_usdt')
+st.line_chart(data['dynamic_fees_in_usdt'].cumsum())
+
+
+st.header('dynamic fees')
+st.bar_chart(aggregated_data['dynamic_fees_in_usdt'])
+
+st.header('order_final_pnl')
+st.bar_chart(aggregated_data['order_final_pnl'])
+
+st.header('buy_ratio')
+st.line_chart(aggregated_data['buy_ratio'])
+
+st.header('nums_of_order')
+st.bar_chart(aggregated_data['nums_of_order'])
+
+st.header('volume')
+st.bar_chart(aggregated_data['volume'])
+
+st.header('daily_pnl_to_volume(in %)')
+st.line_chart(aggregated_data['daily_pnl_to_volume'])
+
+# add a column that calculates the moving average of cex_abs_order_usdt_amount of 7 days
+ma_window_size = st.number_input('Enter the MA Window Size', value=7)
+
+aggregated_data['volume_ma'] = aggregated_data['volume'].rolling(window=ma_window_size).mean()
+
+st.header('Volume MA Line')
+st.bar_chart(aggregated_data['volume_ma'])
+
+
+
+# add a column that calculates the moving average of order_final_pnl of 7 days
+
+aggregated_data['order_final_pnl_ma'] = aggregated_data['order_final_pnl'].rolling(window=ma_window_size).mean()
+
+st.header('order_final_pnl MA Line')
+st.line_chart(aggregated_data['order_final_pnl_ma'])
+
+
+
+# token visualization
+
+
+st.header('Token Dynamic Fees/ Volume')
+st.bar_chart(token_aggregated_data['dynamic_fees_in_usdt']/token_aggregated_data['volume'])
+
+
+st.header("Token Order Final PnL")
+st.bar_chart(token_aggregated_data['order_final_pnl'])
+
+st.header("Token Buy Ratio")
+st.bar_chart(token_aggregated_data['buy_flag']/token_aggregated_data['orderHash'])
+
+st.header("Token Volume")
+st.bar_chart(token_aggregated_data['volume'])
+
+st.header("Token Daily PnL to Volume in %")
+st.bar_chart(100*token_aggregated_data['order_final_pnl']/token_aggregated_data['volume']) 
